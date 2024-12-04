@@ -1,0 +1,166 @@
+---
+title: "spinelli text analysis focus groups"
+author: "Bogard and Spinelli"
+date: "9/5/2019"
+output: html_document
+---
+```{r}
+##Goal: To make WordClouds which were ultimately included in 2020 TAY Needs Assessment Paper *
+##Because project used proprietary data of minors involved in foster care, code below has been redacted and edited to protect privacy. Also, comments are sometimes added for clarity. Lines that has been edited or added are marked with "*"  *
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, results="hide", warning = F)
+
+#loading in the data
+
+library(tidytext)
+library(tidyverse)
+
+dir <- "~/Desktop/[name of directory]" *
+setwd(dir)
+
+#readxl
+filename <- "FocusGroupDatabase.xlsx"
+d <- readxl::read_xlsx(filename)
+
+names(d) <- names(d) %>% 
+    janitor::make_clean_names(); names(d)
+
+```
+
+
+```{r}
+
+#Reshaping our data
+#Data was gathered in survey form where participants could free write responses. Responses were collected and typed. *
+
+#wide to long
+d <- d %>% 
+    gather(key=question, val=response, 7:17) %>% 
+    arrange(focus_group)
+
+#split up the 3 answers per cell
+#d <- d %>% separate(response, into=c("ans_1", "ans_2", "ans_3"), sep=";")
+
+#wide to long
+#d <- d %>% gather(key=ans_no, value = ans, ans_1:ans_3)
+
+#for an overview on regular expressions see: 
+##https://stringr.tidyverse.org/articles/regular-expressions.html
+##https://www.rstudio.com/wp-content/uploads/2016/09/RegExCheatsheet.pdf 
+
+words_df <- d %>% 
+    unnest_tokens(output=word, input=response, token = "words") %>% 
+    anti_join(stop_words) %>% 
+    mutate(word = str_extract(word, "[a-z']+"))
+
+#Defining the different variables that we're going to loop through
+question_levels <- c("trauma_informed", "doing_right", "could_do_better", "help_cope", "good_training", "training_suggestions", "wish_they_knew", "resources_services", "piece_of_advice", "proud_goals")
+provider_levels <- c(-1,1)
+
+```
+
+
+```{r}
+# #Build a function that, for any specified person (provider/youth) and question (e.g., common coping, etc.),....
+# #graphs & saves the 10 most commonly used words between people
+
+graph_builder2 <- function(PROVI=1, QUESTI="trauma_informed", who){
+    unique_df <- words_df %>%
+        filter(provider_1_or_youth_1==PROVI, question==QUESTI) %>%
+        group_by(provider_1_or_youth_1) %>%
+        select(word) %>%
+        #unique() %>%
+        mutate(word_n = n())%>%
+        arrange(word)
+
+    counter <- words_df %>% filter(!is.na(word),
+                                   provider_1_or_youth_1==PROVI,
+                                   question==QUESTI)
+
+    perc_df <- unique_df %>%
+        group_by(word) %>%
+        summarise(word_count = n()) %>%
+        arrange(-word_count) %>%
+        filter(word!="NA") %>%
+        mutate(perc = word_count/length(counter$provider_1_or_youth_1)) %>%
+        slice(1:10)
+
+    g <- ggplot(data=perc_df, aes(x=reorder(word, perc), y=perc*100)) +
+        geom_histogram(stat="identity") +
+        scale_y_continuous(limits = c(0,40)) +
+        coord_flip() +
+        labs(x="Most Frequent Words",
+             title=paste(who, "Focus Group: Transition Age Youth,",
+                         tools::toTitleCase(str_replace(QUESTI, "_", " ")), sep=" "),
+             y="Percent of Participants")+
+        theme_minimal()
+
+    print(g)
+
+    ggsave(paste0("frequency_", who, "_", QUESTI,"_3.jpeg"))
+
+}
+```
+
+
+
+```{r}
+
+#loop through all combinations of questions & providers, then run the function (above) on each
+for(i in provider_levels){
+    for(j in question_levels){
+        graph_builder2(PROVI=i, QUESTI=j, who=ifelse(i==-1, "Providers", "Youth"))
+    }
+}
+
+```
+
+
+
+```{r}
+
+provi_df <- words_df %>% 
+    filter(provider_1_or_youth_1 == -1,
+        !is.na(word)) %>% 
+    #group_by(focus_group) %>% 
+    #distinct(word) %>% 
+    group_by(word) %>% 
+    summarise(word_n = n()) %>% 
+    mutate(word_perc = word_n/(n_distinct(words_df$focusgroup[which(words_df$provider_1_or_youth_1==-1)],na.rm = T))) %>% 
+    arrange(-word_n); provi_df
+
+
+youth_df <- words_df %>% 
+    filter(provider_1_or_youth_1 == 1,
+        !is.na(word)) %>% 
+    #group_by(focus_group) %>% 
+    #distinct(word) %>% 
+    group_by(word) %>% 
+    summarise(word_n = n()) %>% 
+    mutate(word_perc = word_n/(n_distinct(words_df$focusgroup[which(words_df$provider_1_or_youth_1==1)],na.rm = T))) %>%
+    arrange(-word_perc); youth_df
+
+perc_df <- full_join(provi_df, youth_df, by="word") %>%
+    replace_na(list(word_n.x=0, word_perc.x=0,
+                    word_n.y=0, word_perc.y=0))
+
+#x = provi_df
+#https://stackoverflow.com/questions/36556087/conditional-labeling-in-ggplot2-using-geom-text-and-subsetting
+ggplot(data=perc_df %>% filter(!is.na(word)),
+       aes(x=word_perc.x*100, y=word_perc.y*100, label=word)) + 
+    geom_abline(intercept = 0, slope=1, lty=2) + 
+    geom_jitter(alpha=.25, size=2.5) + 
+    geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5, color="darkred") +
+    #scale_x_continuous(labels = scales::percent_format(accuracy = 1)) +
+    #scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    labs(x="Percent of Providers",
+         y="Percent of Youth",
+         title = "Comparing Word Usage Frequencies From Focus Group Discussions") + 
+    theme_minimal()
+
+ggsave("freq comparisons focus group.jpeg")
+
+```
